@@ -57,4 +57,5 @@ class Manipolatore:
         # La posizione viene fornita convenzionalmente a partire da 1
         
         for joint in joints:
-            self.__dh[joint[0] - 1]['parametri'][2 if self.__dh[joint[0] - 1] == 'prismatico' else 3] = joint[1]
+            self._Manipolatore__dh[joint[0] - 1]['parametri']\
+                [2 if self._Manipolatore__dh[joint[0] - 1]['tipo'] == 'prismatico' else 3] = joint[1]
