@@ -111,8 +111,8 @@ class Manipolatore:
             sin_alpha_i = 0
             cos_alpha_i = -1
         else:
-            sin_alpha_i = jnp.sin(jnp.deg2rad(alpha_i))
-            cos_alpha_i = jnp.cos(jnp.deg2rad(alpha_i))
+            sin_alpha_i = np.sin(np.deg2rad(alpha_i))
+            cos_alpha_i = np.cos(np.deg2rad(alpha_i))
 
         if theta_i == 0:
             sin_theta_i = 0
@@ -127,8 +127,8 @@ class Manipolatore:
             sin_theta_i = 0
             cos_theta_i = -1
         else:
-            sin_theta_i = jnp.sin(jnp.deg2rad(theta_i))
-            cos_theta_i = jnp.cos(jnp.deg2rad(theta_i))
+            sin_theta_i = np.sin(np.deg2rad(theta_i))
+            cos_theta_i = np.cos(np.deg2rad(theta_i))
         
         # Inseriamo i coefficienti nella matrice
         matrix[0, 0] = cos_theta_i
@@ -145,22 +145,22 @@ class Manipolatore:
             matrix[0, 3] = a_i*cos_theta_i
             matrix[1, 3] = a_i*sin_theta_i
         
-        return np.asarray(matrix)
+        return matrix
     
     def forward_kinematics(self, params):
         # Calcola la cinematica diretta del manipolatore
         # partendo dalla lista dei parametri ai giunti
         
         # matrice identità che conterrà la cinematica diretta
-        fk = jnp.eye(4,dtype='float')
+        fk = np.eye(4,dtype='float')
         
         # itero lungo la lista dei giunti della tabella DH
         # e accumulo i prodotti interni della matrice fk con la
         # trasformazione M_i-1,i
         for i in range(len(self._Manipolatore__dh)):
-            fk = jnp.matmul(fk,self._m_joint(params[i],i))
+            fk = np.matmul(fk,self._m_joint(params[i],i+1))
         
-        return np.asarray(fk)
+        return fk
     
     def jacobiano(self, params):
         
@@ -178,22 +178,24 @@ class Manipolatore:
         
         return jacfwd(fun)(params)
         
-    def inverse_kinematics(self, position, effector=None, start_value=None, orientation=None, regularization=0.01):
+    def inverse_kinematics(self, position, start_value=None, orientation=None, regularization=0.5):
         """Cinematica inversa
 
         Args:
-            position (List[float]): posizione del target [p, o, n, a]
+            position (List[float]): se orientation = 'all', la posizione e orientazione del target [p_T, n_T, o_T, a_T];
+                se orientation = 'X'|'Y'|'Z', la posizione [p_T, axis] dove axis è l'asse 
+                che individua la direzione X, Y, o Z al target
             
             effector (list[float], optional): posizione dell'effettore estratta dai sensori. Defaults to None.
             
             start_value (List[float], optional): lista dei parametri estratta dai sensori. Defaults to None.
             
-            orientation (str, optional): orientamento dell'effettore al target. Defaults to None.
+            orientation (str, optional): orientamento dell'effettore al target: 'X'|'Y'|'Z'|'all'. Defaults to None.
             
-            regularization (float, optional): parametro di regolarizzazione. Defaults to 0.01.
+            regularization (float, optional): parametro di regolarizzazione. Defaults to 0.5.
 
         Returns:
-            numpy.array: lista dei parametri che risolve la cinematica inversa
+            ndarray shape (n,): lista dei parametri che risolve la cinematica inversa
         """
         if start_value != None:
             params = start_value
@@ -213,11 +215,8 @@ class Manipolatore:
             # calcoliamo la cinematica diretta
             fk = self.forward_kinematics(params)
 
-            if effector != None:
-                target = position[0:3] - effector
-            else:
-                # costruiamo il target di posizione
-                target = position[0:3] - fk[:3,3]
+            # costruiamo il target di posizione
+            target = np.asarray(position[0:3]) - fk[:3,3]
 
             # costruiamo il target di orientazione come matrice identità
             target_or = np.eye(3, dtype=float)
@@ -231,7 +230,7 @@ class Manipolatore:
             elif orientation == 'Z':
                 target_or[:3,2] = position[3:6]
             elif orientation == 'all':
-                target_or = fk[:3,:3]
+                target_or = position[3:12]
 
             if orientation != None:
 
@@ -239,20 +238,11 @@ class Manipolatore:
                 # e la versione vettorizzata della cinematica diretta
                 target = np.concatenate((target, target_or.ravel()))
 
-            # restituiamo la funzione f(p) = target + reg*target^2
-            return target + regularization * np.linalg.norm(target)
+            # restituiamo la funzione f(p) = reg*target^2
+            return regularization * np.linalg.norm(target)
         
         # invochiamo la routine di ottimizzazione
         res = least_squares(target_fun, params, args=(position, orientation), bounds=bounds)
         
-        return res
-
-        
-        
-            
-            
-            
-            
-        
-        
+        return res.x
     
