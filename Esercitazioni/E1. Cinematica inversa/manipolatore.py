@@ -3,6 +3,9 @@ Modulo che esporta la definizione di un manipolatore robotico
 """
 
 import numpy as np
+import jax.numpy as jnp
+from jax import jacfwd
+from scipy.optimize import least_squares
 
 class Manipolatore:
     """
@@ -10,7 +13,7 @@ class Manipolatore:
     di un manipolatore ad n giunti prismatici o di rotazione
     """
     
-    def __init__(self, dh):
+    def __init__(self, dh, bounds):
         """
             Costruisce il manipolatore a partire dalla tabella di Denavit Hartenberg
             costruita come una lista di dizionari:
@@ -21,6 +24,12 @@ class Manipolatore:
             Ovvero da un iterabile di coppie, ad esempio:
 
             (([alpha1, a1, d1, theta1],"prismatico"),([alpha2, a2, d2, theta2],"rotazione"),...)
+            
+            Richiede anche una lista di coppie di estremi dei valori dei parametri:
+            
+            [(lower_1,upper_1), ..., (lower_n,uper_n)] o None se non sono specificati
+            
+            Se alcuni parametri non sono limitati usare np.inf o -np.inf come valori estremi
         """
 
         self.__dh = []
@@ -29,6 +38,8 @@ class Manipolatore:
                 joint if isinstance(dh,(list, tuple)) and isinstance(dh[0],dict)\
                 else dict((('parametri',joint[1]),('tipo',joint[0])))\
             )
+        
+        self.bounds = bounds
         
     def __repr__(self):
         joints = '['
@@ -59,20 +70,28 @@ class Manipolatore:
         for joint in joints:
             self._Manipolatore__dh[joint[0] - 1]['parametri']\
                 [2 if self._Manipolatore__dh[joint[0] - 1]['tipo'] == 'prismatico' else 3] = joint[1]
+    
+    # Metodo per ottenere la lista dei valori dei parametri
+    def get_parameters(self):
+        
+        return [x[1] for x in self.joints]
 
     # Metodo "nascosto" per calcolare la matrice al singolo giunto
     # 
-    # Riceve in ingresso l'indice i del giunto (partendo da 1) e restituisce
+    # Riceve in ingresso il parametro e l'indice i del giunto 
+    # (partendo da 1) e restituisce
     # l'array numpy corrsipondente alla matrice Mi-1,i
-    def _m_joint(self, joint_index):
+    def _m_joint(self, param, joint_index):
         
         matrix = np.eye(4,dtype='float')
         
         # Assegniamo i valori dei parametri a delle variabili di comodo
         alpha_i = self._Manipolatore__dh[joint_index - 1]['parametri'][0]
         a_i = self._Manipolatore__dh[joint_index - 1]['parametri'][1]
-        d_i = self._Manipolatore__dh[joint_index - 1]['parametri'][2]
-        theta_i = self._Manipolatore__dh[joint_index - 1]['parametri'][3]
+        d_i = param if self._Manipolatore__dh[joint_index - 1]['tipo'] == 'prismatico'\
+            else self._Manipolatore__dh[joint_index - 1]['parametri'][2]
+        theta_i = param if self._Manipolatore__dh[joint_index - 1]['tipo'] == 'rotazione'\
+            else self._Manipolatore__dh[joint_index - 1]['parametri'][3]
         
         # Inseriamo d_i in posizione (2,3) se diverso da zero
         if d_i != 0.0:
@@ -92,8 +111,8 @@ class Manipolatore:
             sin_alpha_i = 0
             cos_alpha_i = -1
         else:
-            sin_alpha_i = np.sin(np.deg2rad(alpha_i))
-            cos_alpha_i = np.cos(np.deg2rad(alpha_i))
+            sin_alpha_i = jnp.sin(jnp.deg2rad(alpha_i))
+            cos_alpha_i = jnp.cos(jnp.deg2rad(alpha_i))
 
         if theta_i == 0:
             sin_theta_i = 0
@@ -108,8 +127,8 @@ class Manipolatore:
             sin_theta_i = 0
             cos_theta_i = -1
         else:
-            sin_theta_i = np.sin(np.deg2rad(theta_i))
-            cos_theta_i = np.cos(np.deg2rad(theta_i))
+            sin_theta_i = jnp.sin(jnp.deg2rad(theta_i))
+            cos_theta_i = jnp.cos(jnp.deg2rad(theta_i))
         
         # Inseriamo i coefficienti nella matrice
         matrix[0, 0] = cos_theta_i
@@ -126,30 +145,114 @@ class Manipolatore:
             matrix[0, 3] = a_i*cos_theta_i
             matrix[1, 3] = a_i*sin_theta_i
         
-        return matrix
+        return np.asarray(matrix)
     
-    def forward_kinematics(self, joint_start=None, joint_end=None):
-        # Calcola la cinematica diretta tra due sistemi di riferimento
-        # qualunque tra quelli solidali ai giunti
-        #
-        # forward_kinematics(i) --> M_0,i cinematica diretta del giunto i
-        # foreard_kinematics(i,j) --> M_i,j cinematica diretta dal giunto i al giunto j
-        
-        if joint_start == None and joint_end == None:
-            joint_start = 0
-            joint_end = len(self._Manipolatore__dh)
-        elif joint_end == None:
-            joint_end = len(self._Manipolatore__dh)
-        elif joint_start == None:
-            joint_start = 0
+    def forward_kinematics(self, params):
+        # Calcola la cinematica diretta del manipolatore
+        # partendo dalla lista dei parametri ai giunti
         
         # matrice identità che conterrà la cinematica diretta
-        fk = np.eye(4,dtype='float')
+        fk = jnp.eye(4,dtype='float')
         
         # itero lungo la lista dei giunti della tabella DH
         # e accumulo i prodotti interni della matrice fk con la
         # trasformazione M_i-1,i
-        for joint in range(joint_start+1,joint_end+1):
-            fk = np.matmul(fk,self._m_joint(joint))
+        for i in range(len(self._Manipolatore__dh)):
+            fk = jnp.matmul(fk,self._m_joint(params[i],i))
         
-        return fk
+        return np.asarray(fk)
+    
+    def jacobiano(self, params):
+        
+        def fun(x):
+            
+            # calcoliamo la cinematica diretta
+            fk = self.forward_kinematics(x)
+        
+            return jnp.asarray(
+                [fk[0,3], fk[1,3], fk[2,3], 
+                 fk[0,0], fk[0,1], fk[0,2],
+                 fk[1,0], fk[1,1], fk[1,2],
+                 fk[2,0], fk[2,1], fk[2,2]]
+                )
+        
+        return jacfwd(fun)(params)
+        
+    def inverse_kinematics(self, position, effector=None, start_value=None, orientation=None, regularization=0.01):
+        """Cinematica inversa
+
+        Args:
+            position (List[float]): posizione del target [p, o, n, a]
+            
+            effector (list[float], optional): posizione dell'effettore estratta dai sensori. Defaults to None.
+            
+            start_value (List[float], optional): lista dei parametri estratta dai sensori. Defaults to None.
+            
+            orientation (str, optional): orientamento dell'effettore al target. Defaults to None.
+            
+            regularization (float, optional): parametro di regolarizzazione. Defaults to 0.01.
+
+        Returns:
+            numpy.array: lista dei parametri che risolve la cinematica inversa
+        """
+        if start_value != None:
+            params = start_value
+        else:
+            # estraggo la lista dei valori parametri
+            params = [x[1] for x in self.joints]
+        
+        # calcolo il vettore degli estremi
+        if self.bounds != None:
+            bounds = ([x[0] for x in self.bounds],[x[1] for x in self.bounds])
+        else:
+            bounds = (-np.inf, np.inf)
+        
+        # definisco la funzione obiettivo
+        def target_fun(params, position, orientation):
+            
+            # calcoliamo la cinematica diretta
+            fk = self.forward_kinematics(params)
+
+            if effector != None:
+                target = position[0:3] - effector
+            else:
+                # costruiamo il target di posizione
+                target = position[0:3] - fk[:3,3]
+
+            # costruiamo il target di orientazione come matrice identità
+            target_or = np.eye(3, dtype=float)
+
+            # Condizioniamo le colonne del target di orientazione a seconda
+            # della richiesta di orientamento dell'approccio dell'effettore
+            if orientation == 'X':
+                target_or[:3,0] = position[3:6]
+            elif orientation == 'Y':
+                target_or[:3,1] = position[3:6]
+            elif orientation == 'Z':
+                target_or[:3,2] = position[3:6]
+            elif orientation == 'all':
+                target_or = fk[:3,:3]
+
+            if orientation != None:
+
+                # creiamo il vettore differenza tra la posizione del target
+                # e la versione vettorizzata della cinematica diretta
+                target = np.concatenate((target, target_or.ravel()))
+
+            # restituiamo la funzione f(p) = target + reg*target^2
+            return target + regularization * np.linalg.norm(target)
+        
+        # invochiamo la routine di ottimizzazione
+        res = least_squares(target_fun, params, args=(position, orientation), bounds=bounds)
+        
+        return res
+
+        
+        
+            
+            
+            
+            
+        
+        
+    
