@@ -4,8 +4,19 @@ Modulo che esporta la definizione di un manipolatore robotico
 
 import numpy as np
 import jax.numpy as jnp
-from jax import jacfwd
+from jax import jacfwd, Array
 from scipy.optimize import least_squares
+
+def to_ndarray(jnparray, shape=(1,)):
+    
+    l = []
+    for el in jnparray.ravel():
+        l.append(float(el))
+    
+    v = np.array(l)
+    
+    return v.reshape(shape)
+    
 
 class Manipolatore:
     """
@@ -95,7 +106,8 @@ class Manipolatore:
         
         # Inseriamo d_i in posizione (2,3) se diverso da zero
         if d_i != 0.0:
-            matrix[2,3] = d_i
+            matrix[2, 3] = d_i
+            #matrix = matrix.at[2, 3].set(d_i) # assegnamento JAX
         
         # Calcolo efficiente di sin e cos di alpha_i e theta_i
         if alpha_i == 0.0:
@@ -111,8 +123,8 @@ class Manipolatore:
             sin_alpha_i = 0
             cos_alpha_i = -1
         else:
-            sin_alpha_i = np.sin(np.deg2rad(alpha_i))
-            cos_alpha_i = np.cos(np.deg2rad(alpha_i))
+            sin_alpha_i = jnp.sin(jnp.deg2rad(alpha_i))
+            cos_alpha_i = jnp.cos(jnp.deg2rad(alpha_i))
 
         if theta_i == 0:
             sin_theta_i = 0
@@ -127,21 +139,33 @@ class Manipolatore:
             sin_theta_i = 0
             cos_theta_i = -1
         else:
-            sin_theta_i = np.sin(np.deg2rad(theta_i))
-            cos_theta_i = np.cos(np.deg2rad(theta_i))
+            sin_theta_i = jnp.sin(jnp.deg2rad(theta_i))
+            cos_theta_i = jnp.cos(jnp.deg2rad(theta_i))
         
         # Inseriamo i coefficienti nella matrice
+        #matrix = matrix.at[0, 0].set(cos_theta_i)
+        #matrix = matrix.at[1, 0].set(sin_theta_i)
+        #matrix = matrix.at[2, 1].set(sin_alpha_i)
+        #matrix = matrix.at[2, 2].set(cos_alpha_i)
+
         matrix[0, 0] = cos_theta_i
         matrix[1, 0] = sin_theta_i
         matrix[2, 1] = sin_alpha_i
         matrix[2, 2] = cos_alpha_i
         
+        #matrix = matrix.at[0, 1].set(-cos_alpha_i*sin_theta_i)
+        #matrix = matrix.at[0, 2].set(sin_alpha_i*sin_theta_i)
+        #matrix = matrix.at[1, 1].set(cos_alpha_i*cos_theta_i)
+        #matrix = matrix.at[1, 2].set(-sin_alpha_i*cos_theta_i)
+
         matrix[0, 1] = -cos_alpha_i*sin_theta_i
         matrix[0, 2] = sin_alpha_i*sin_theta_i
         matrix[1, 1] = cos_alpha_i*cos_theta_i
         matrix[1, 2] = -sin_alpha_i*cos_theta_i
         
         if a_i != 0:
+            #matrix = matrix.at[0, 3].set(a_i*cos_theta_i)
+            #matrix = matrix.at[1, 3].set(a_i*sin_theta_i)
             matrix[0, 3] = a_i*cos_theta_i
             matrix[1, 3] = a_i*sin_theta_i
         
@@ -167,16 +191,22 @@ class Manipolatore:
         def fun(x):
             
             # calcoliamo la cinematica diretta
-            fk = self.forward_kinematics(x)
-        
-            return jnp.asarray(
+
+            par = to_ndarray(x, shape=(len(x),))
+            fk = self.forward_kinematics(par)
+
+            res = np.array(
                 [fk[0,3], fk[1,3], fk[2,3], 
                  fk[0,0], fk[0,1], fk[0,2],
                  fk[1,0], fk[1,1], fk[1,2],
-                 fk[2,0], fk[2,1], fk[2,2]]
-                )
+                 fk[2,0], fk[2,1], fk[2,2]])
+            
+            return jnp.asarray(res)
         
-        return jacfwd(fun)(params)
+        p = jnp.asarray(params)
+        jac = jacfwd(fun)(p)
+        
+        return to_ndarray(jac,shape=jac.shape)
         
     def inverse_kinematics(self, position, start_value=None, orientation=None, regularization=0.5):
         """Cinematica inversa
@@ -185,8 +215,6 @@ class Manipolatore:
             position (List[float]): se orientation = 'all', la posizione e orientazione del target [p_T, n_T, o_T, a_T];
                 se orientation = 'X'|'Y'|'Z', la posizione [p_T, axis] dove axis è l'asse 
                 che individua la direzione X, Y, o Z al target
-            
-            effector (list[float], optional): posizione dell'effettore estratta dai sensori. Defaults to None.
             
             start_value (List[float], optional): lista dei parametri estratta dai sensori. Defaults to None.
             
@@ -225,10 +253,13 @@ class Manipolatore:
             # della richiesta di orientamento dell'approccio dell'effettore
             if orientation == 'X':
                 target_or[:3,0] = position[3:6]
+                #target_or = target_or.at[:3,0].set(position[3:6])
             elif orientation == 'Y':
                 target_or[:3,1] = position[3:6]
+                #target_or = target_or.at[:3,1].set(position[3:6])
             elif orientation == 'Z':
                 target_or[:3,2] = position[3:6]
+                #target_or = target_or.at[:3,2].set(position[3:6])
             elif orientation == 'all':
                 target_or = position[3:12]
 
