@@ -36,7 +36,7 @@ bounds[4] = (bounds[4][0]+180.0,bounds[4][1]+180.0)
 # creiamo il maniplatore IRB4600-40 in configurazione DH
 irb = Manipolatore(
                 ({'tipo':'rotazione','parametri':[-90.0, 0.175, 0.495, 0.0]},
-                {'tipo':'rotazione','parametri':[0.0, 1.095, 0.0, -90.0]},  # theta_1 - 90° in tabella DH
+                {'tipo':'rotazione','parametri':[0.0, 1.095, 0.0, -90.0]},  # theta_2 - 90° in tabella DH
                 {'tipo':'rotazione','parametri':[-90.0, 0.175, 0.0, 0.0]},
                 {'tipo':'rotazione','parametri':[90.0, 0.0, 1.27, 0.0]},
                 {'tipo':'rotazione','parametri':[90.0, 0.0, 0.0, 180.0]},   # theta_5 + 180° in tabella DH
@@ -72,7 +72,7 @@ while robot.step(timestep) != -1:
     ikResults = irb.inverse_kinematics(targetPosition + [orientation[0], orientation[3], orientation[6]],
                                         orientation='X',
                                         start_value=initial_position,
-                                        regularization=0.1)
+                                        regularization=0.5)
 
     # correzione inversa angoli per tabella DH IRB4600-40
     ikResults[1] += 90.0
